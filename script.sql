@@ -5,6 +5,7 @@ DROP TABLE IF EXISTS status;
 DROP TABLE IF EXISTS relatorio;
 DROP TABLE IF EXISTS uso_produto;
 DROP TABLE IF EXISTS estoque;
+DROP TABLE IF EXISTS pagamento;
 
 DROP TABLE IF EXISTS processo;
 DROP TABLE IF EXISTS prioridade;
@@ -17,6 +18,7 @@ DROP TABLE IF EXISTS cargo;
 DROP TABLE IF EXISTS endereco;
 
 DROP TABLE IF EXISTS unidade_medida;
+DROP TABLE IF EXISTS plano;
 DROP TABLE IF EXISTS log_geral;
 
 DROP TRIGGER IF EXISTS trg_log_automatico ON eta_admin;
@@ -243,6 +245,32 @@ CREATE TABLE estoque (
 );
 
 
+-- ==============================
+-- Tabela: Plano
+-- ==============================
+CREATE TABLE plano (
+                       id_plano SERIAL PRIMARY KEY,
+                       nome VARCHAR(100) NOT NULL UNIQUE,
+                       descricao TEXT,
+                       valor_mensal NUMERIC(10,2) NOT NULL CHECK (valor_mensal >= 0),
+                       duracao_meses INT NOT NULL CHECK (duracao_meses > 0)
+);
+
+-- ==============================
+-- Tabela: Pagamento
+-- ==============================
+CREATE TABLE pagamento (
+                           id_pagamento SERIAL PRIMARY KEY,
+                           id_plano INT NOT NULL,
+                           data_pagamento DATE NOT NULL DEFAULT CURRENT_DATE,
+                           data_validade DATE NOT NULL,
+                           id_eta_admin INT NOT NULL,
+                           CONSTRAINT fk_pagamento_etaadmin FOREIGN KEY (id_eta_admin)
+                               REFERENCES eta_admin (id_eta_admin),
+                           CONSTRAINT fk_pagamento_plano FOREIGN KEY (id_plano)
+                               REFERENCES Plano (id_plano)
+);
+
 
 CREATE TABLE log_geral (
                            id_log SERIAL PRIMARY KEY,
@@ -256,12 +284,11 @@ CREATE TABLE log_geral (
 -- =============================
 -- INDEXES
 -- =============================
-CREATE INDEX idx_produto_nome ON produto(nome_produto);
-CREATE INDEX idx_eta_nome ON eta(nome);
 CREATE INDEX idx_cargo_nome ON cargo(nome);
 CREATE INDEX idx_funcionario_email ON funcionario(email);
-
-
+CREATE INDEX idx_relatorio_data_final ON relatorio (data_processo_final);
+CREATE INDEX idx_estoque_quantidade ON estoque(quantidade);
+CREATE INDEX idx_funcionario_id_pai ON funcionario(id_pai);
 
 
 
@@ -277,6 +304,19 @@ CREATE OR REPLACE FUNCTION log_automatico() RETURNS TRIGGER AS $$
 BEGIN
 INSERT INTO log_geral (tabela, operacao)
 VALUES (TG_TABLE_NAME, TG_OP);
+RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Função para calcular validade do plano
+CREATE OR REPLACE FUNCTION calcular_data_validade()
+RETURNS TRIGGER AS $$
+BEGIN
+SELECT NEW.data_pagamento + (p.duracao_meses || ' months')::interval
+INTO NEW.data_validade
+FROM plano p
+WHERE p.id_plano = NEW.id_plano;
+
 RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
@@ -570,9 +610,6 @@ END;
 $$ LANGUAGE plpgsql;
 
 
-SELECT * FROM relatorio_comentario_gerente(1, 10, 2025);
-
-
 -- Data relatorio por eta
 CREATE OR REPLACE FUNCTION data_relatorio_eta(p_id_eta INT)
 RETURNS TABLE(
@@ -692,6 +729,13 @@ CREATE TRIGGER trg_atualizar_estoque
     EXECUTE FUNCTION atualizar_estoque();
 
 
+-- Trigger para calcular data de validade do plano no pagamento
+CREATE TRIGGER trg_calcular_data_validade
+    BEFORE INSERT ON pagamento
+    FOR EACH ROW
+    EXECUTE FUNCTION calcular_data_validade();
+
+
 -- Trigger para verificar relatorio processo
 CREATE TRIGGER trg_verificar_relatorio_processo
     BEFORE INSERT OR UPDATE ON relatorio
@@ -772,6 +816,17 @@ CREATE TRIGGER trg_log_automatico_unidade_medida
     AFTER INSERT OR UPDATE OR DELETE ON unidade_medida
     FOR EACH ROW EXECUTE FUNCTION log_automatico();
 
+-- Trigger para plano
+CREATE TRIGGER trg_log_automatico_plano
+    AFTER INSERT OR UPDATE OR DELETE ON plano
+    FOR EACH ROW EXECUTE FUNCTION log_automatico();
+
+-- Trigger para pagamento
+CREATE TRIGGER trg_log_automatico_pagamento
+    AFTER INSERT OR UPDATE OR DELETE ON pagamento
+    FOR EACH ROW EXECUTE FUNCTION log_automatico();
+
+
 -- ==============================
 -- CARGO
 -- ==============================
@@ -814,6 +869,7 @@ INSERT INTO funcionario (nome, email, data_admissao, data_nascimento, id_eta, id
                                                                                                     ('Pedro Frossard', 'pedro.frossard@gmail.com','2023-05-05', '1992-08-15', 1, 4, NULL),
                                                                                                     ('Bruno Dias', 'bruno.dias@gmail.com', '2023-07-11', '1993-02-10', 5, 1, NULL),
                                                                                                     ('Fernando Paiva', 'fernando.paiva@gmail.com', '2022-11-23', '1987-03-30', 4, 2, 6);
+
 
 
 -- ==============================
@@ -929,3 +985,22 @@ INSERT INTO uso_produto (quantidade, id_processo, id_produto) VALUES
                                                                   (1, 3, 3),
                                                                   (3, 4, 4),
                                                                   (1, 5, 5);
+
+-- ==============================
+-- PLANO
+-- ==============================
+INSERT INTO plano (nome, descricao, valor_mensal, duracao_meses) VALUES
+                                                                     ('Básico', 'Plano básico com funcionalidades essenciais', 199.90, 6),
+                                                                     ('Intermediário', 'Plano intermediário com recursos adicionais', 399.90, 12),
+                                                                     ('Premium', 'Plano premium com todos os recursos inclusos', 699.90, 24);
+
+-- ==============================
+-- PAGAMENTO
+-- ==============================
+INSERT INTO pagamento (id_plano, data_pagamento, id_eta_admin) VALUES
+                                                                   (1, '2025-09-02', 2),  -- João Santos
+                                                                   (2, '2025-09-03', 1),  -- Carlos Silva
+                                                                   (3, '2025-09-03', 5);  -- Bruno Dias
+
+
+
